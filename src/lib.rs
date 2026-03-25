@@ -10,10 +10,10 @@
 //! ## Quick Start
 //!
 //! ```rust
-//! use taikyoku_core::Board;
+//! use taikyokushogi::Board;
 //!
 //! let mut board = Board::initial();
-//! assert_eq!(board.piece_count(taikyoku_core::Color::Black), 402);
+//! assert_eq!(board.piece_count(taikyokushogi::Color::Black), 402);
 //!
 //! let moves = board.legal_moves();
 //! println!("{} legal moves from starting position", moves.len());
@@ -29,7 +29,7 @@
 //! ## Search
 //!
 //! ```rust,no_run
-//! use taikyoku_core::Board;
+//! use taikyokushogi::Board;
 //!
 //! let mut board = Board::initial();
 //! let result = board.search(2, 5000); // depth 2, 5s time limit
@@ -264,7 +264,7 @@ pub struct PieceInfo {
 /// Look up information about a piece type by abbreviation.
 ///
 /// ```rust
-/// let info = taikyoku_core::piece_info("K").unwrap();
+/// let info = taikyokushogi::piece_info("K").unwrap();
 /// assert_eq!(info.name, "King");
 /// assert!(info.value > 0);
 /// ```
@@ -313,9 +313,9 @@ impl Board {
     /// Create a board with the standard initial position (804 pieces).
     ///
     /// ```rust
-    /// let board = taikyoku_core::Board::initial();
-    /// assert_eq!(board.piece_count(taikyoku_core::Color::Black), 402);
-    /// assert_eq!(board.piece_count(taikyoku_core::Color::White), 402);
+    /// let board = taikyokushogi::Board::initial();
+    /// assert_eq!(board.piece_count(taikyokushogi::Color::Black), 402);
+    /// assert_eq!(board.piece_count(taikyokushogi::Color::White), 402);
     /// ```
     pub fn initial() -> Self {
         let mut b = board::Board::new();
@@ -389,7 +389,7 @@ impl Board {
     /// move was found and applied, `false` otherwise.
     ///
     /// ```rust,no_run
-    /// let mut board = taikyoku_core::Board::initial();
+    /// let mut board = taikyokushogi::Board::initial();
     /// board.apply_by_coord(25, 0, 24, 0, false); // move pawn forward
     /// ```
     pub fn apply_by_coord(&mut self, from_row: usize, from_col: usize,
@@ -492,6 +492,6 @@ use pyo3::prelude::*;
 
 #[cfg(feature = "python")]
 #[pymodule]
-fn taikyoku_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn taikyokushogi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     python::register(m)
 }

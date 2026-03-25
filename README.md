@@ -118,7 +118,8 @@ python3 web_gui.py 8080
 ```
 taikyokushogi/
   src/                    # Rust engine (PyO3)
-    lib.rs                #   Python bindings
+    lib.rs                #   Public API + Python bindings
+    python.rs             #   PyO3 bindings (behind feature flag)
     types.rs              #   Core types, ray tables
     pieces.rs             #   301 piece types, Betza parser
     board.rs              #   Board representation
@@ -147,6 +148,37 @@ taikyokushogi/
 | Depth-2 search | 3,017 ms | 38 ms | 79x |
 | Depth-3 search | — | 4,954 ms | — |
 | Random game (500 moves) | ~14 s | 29 ms | 500x |
+
+## Using as a Rust Crate
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+taikyokushogi = "0.1"
+```
+
+```rust
+use taikyokushogi::{Board, Color};
+
+let mut board = Board::initial();
+let moves = board.legal_moves();
+println!("{} legal moves", moves.len());
+
+board.apply(&moves[0]);
+println!("Score: {}", board.material_score());
+board.undo();
+
+// Search
+let result = board.search(2, 5000);
+if let Some(mv) = result.best_move {
+    println!("Best: {}, score: {}", mv, result.score);
+}
+
+// Piece info
+let info = taikyokushogi::piece_info("LN").unwrap();
+println!("{}: {} (area={}, igui={})", info.name, info.value, info.area_steps, info.has_igui);
+```
 
 ## References
 

@@ -12,9 +12,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Try Rust backend first, fall back to pure Python
 try:
-    import taikyoku_core
+    import taikyokushogi
     USE_RUST = True
-    print("Using Rust backend (taikyoku_core)")
+    print("Using Rust backend (taikyokushogi)")
 except ImportError:
     USE_RUST = False
     print("Rust backend not found, using pure Python")
@@ -27,9 +27,9 @@ if not USE_RUST:
     from taikyoku_engine.movegen import generate_legal_moves, choose_random_move
     from taikyoku_engine.move import Move
 else:
-    BOARD_SIZE = taikyoku_core.BOARD_SIZE
-    BLACK = taikyoku_core.BLACK
-    WHITE = taikyoku_core.WHITE
+    BOARD_SIZE = taikyokushogi.BOARD_SIZE
+    BLACK = taikyokushogi.BLACK
+    WHITE = taikyokushogi.WHITE
 
 # ============================================================
 # Game State (global, protected by lock)
@@ -40,7 +40,7 @@ game_lock = threading.Lock()
 class GameState:
     def __init__(self):
         if USE_RUST:
-            self.board = taikyoku_core.PyBoard()
+            self.board = taikyokushogi.PyBoard()
         else:
             self.board = TaikyokuBoard()
         self.board.setup_initial()
@@ -54,7 +54,7 @@ class GameState:
 
     def reset(self, mode='human_vs_random', human_color=BLACK):
         if USE_RUST:
-            self.board = taikyoku_core.PyBoard()
+            self.board = taikyokushogi.PyBoard()
         else:
             self.board = TaikyokuBoard()
         self.board.setup_initial()
@@ -93,7 +93,7 @@ def board_to_json(board):
                 else:
                     piece, color = cell
                     row.append({'piece': piece, 'color': color,
-                                'name': taikyoku_core.piece_name_py(piece)})
+                                'name': taikyokushogi.piece_name_py(piece)})
             cells.append(row)
         result = board.game_result()
         return {
@@ -219,7 +219,7 @@ class GameHandler(BaseHTTPRequestHandler):
         elif path == '/api/piece-info':
             abbrev = params.get('abbrev', [''])[0]
             if USE_RUST:
-                self._send_json(taikyoku_core.piece_info_py(abbrev))
+                self._send_json(taikyokushogi.piece_info_py(abbrev))
             else:
                 name = PIECE_NAME.get(abbrev, abbrev)
                 value = PIECE_VALUE.get(abbrev, 0)

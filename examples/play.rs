@@ -4,13 +4,13 @@
 //! cargo run --example play
 //! ```
 
-use taikyoku_core::{Board, Color};
+use taikyokushogi::{Board, Color};
 
 fn main() {
     let mut board = Board::initial();
 
     println!("=== Taikyoku Shogi ===");
-    println!("Board: 36x36, {} squares", taikyoku_core::BOARD_SIZE * taikyoku_core::BOARD_SIZE);
+    println!("Board: 36x36, {} squares", taikyokushogi::BOARD_SIZE * taikyokushogi::BOARD_SIZE);
     println!("Black pieces: {}", board.piece_count(Color::Black));
     println!("White pieces: {}", board.piece_count(Color::White));
     println!();
@@ -21,10 +21,10 @@ fn main() {
     println!();
 
     // Look up piece info
-    if let Some(info) = taikyoku_core::piece_info("K") {
+    if let Some(info) = taikyokushogi::piece_info("K") {
         println!("King: value={}, slides={} dirs, royal=true", info.value, info.slide_directions);
     }
-    if let Some(info) = taikyoku_core::piece_info("LN") {
+    if let Some(info) = taikyokushogi::piece_info("LN") {
         println!("Lion: value={}, area={} steps, igui={}", info.value, info.area_steps, info.has_igui);
     }
     println!();
