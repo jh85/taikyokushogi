@@ -161,7 +161,7 @@ fn gen_hooks(board: &Board, sq: usize, pt: u16, color: u8, mv: &Movement,
 
     for &d in dirs {
         let ray = rt.ray_for_color(sq, d, color);
-        for (j, &mid_sq) in ray.iter().enumerate() {
+        for (_j, &mid_sq) in ray.iter().enumerate() {
             let mid = mid_sq as usize;
             let target = board.cells[mid];
             if target != EMPTY_CELL {

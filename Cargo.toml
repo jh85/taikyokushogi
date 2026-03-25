@@ -2,11 +2,24 @@
 name = "taikyoku_core"
 version = "0.1.0"
 edition = "2021"
+description = "Taikyoku Shogi engine — the largest known shogi variant (36x36 board, 804 pieces, 209 piece types)"
+license = "MIT"
+repository = "https://github.com/jh85/taikyokushogi"
+keywords = ["shogi", "taikyoku", "board-game", "chess-variant", "game-engine"]
+categories = ["games", "game-engines"]
 
 [lib]
 name = "taikyoku_core"
-crate-type = ["cdylib"]
+# Build as both a Rust library and (optionally) a Python extension
+crate-type = ["lib", "cdylib"]
+
+[features]
+default = []
+python = ["dep:pyo3"]
 
 [dependencies]
-pyo3 = { version = "0.24", features = ["extension-module"] }
+pyo3 = { version = "0.24", features = ["extension-module"], optional = true }
 rand = "0.8"
+
+[[example]]
+name = "play"

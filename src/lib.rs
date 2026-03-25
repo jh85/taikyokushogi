@@ -1,6 +1,42 @@
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
-use std::collections::HashMap;
+//! # Taikyoku Shogi Engine
+//!
+//! A complete engine for [Taikyoku Shogi](https://en.wikipedia.org/wiki/Taikyoku_shogi),
+//! the largest known variant of shogi (Japanese chess).
+//!
+//! - **36 x 36** board (1,296 squares)
+//! - **804 pieces** (402 per side)
+//! - **209 piece types** with distinct movement patterns
+//!
+//! ## Quick Start
+//!
+//! ```rust
+//! use taikyoku_core::Board;
+//!
+//! let mut board = Board::initial();
+//! assert_eq!(board.piece_count(taikyoku_core::Color::Black), 402);
+//!
+//! let moves = board.legal_moves();
+//! println!("{} legal moves from starting position", moves.len());
+//!
+//! // Apply the first move
+//! board.apply(&moves[0]);
+//! println!("Score: {}", board.material_score());
+//!
+//! // Undo
+//! board.undo();
+//! ```
+//!
+//! ## Search
+//!
+//! ```rust,no_run
+//! use taikyoku_core::Board;
+//!
+//! let mut board = Board::initial();
+//! let result = board.search(2, 5000); // depth 2, 5s time limit
+//! if let Some(mv) = result.best_move {
+//!     println!("Best move: {}, score: {}", mv, result.score);
+//! }
+//! ```
 
 mod types;
 mod pieces;
@@ -9,106 +45,357 @@ mod movegen;
 mod eval;
 mod search;
 
-use types::*;
-use board::Board;
+#[cfg(feature = "python")]
+mod python;
 
 // ============================================================
-// PyO3 Module
+// Public re-exports — the user-facing API
 // ============================================================
 
-#[pyclass]
-#[derive(Clone)]
-struct PyBoard {
-    inner: Board,
+/// Board size (36).
+pub const BOARD_SIZE: usize = types::BOARD_SIZE;
+
+/// Number of squares (1,296).
+pub const NUM_SQUARES: usize = types::NUM_SQUARES;
+
+/// Side / player color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Color {
+    Black = 0,
+    White = 1,
 }
 
-#[pymethods]
-impl PyBoard {
-    #[new]
-    fn new() -> Self {
-        PyBoard { inner: Board::new() }
-    }
-
-    fn setup_initial(&mut self) {
-        self.inner.setup_initial();
-    }
-
-    fn at(&self, row: usize, col: usize) -> Option<(String, u8)> {
-        let sq = sq_index(row, col);
-        let cell = self.inner.cells[sq];
-        if cell == EMPTY_CELL {
-            None
-        } else {
-            let pt = cell_piece(cell);
-            let color = cell_color(cell);
-            Some((pieces::abbrev(pt).to_string(), color))
+impl Color {
+    /// The other color.
+    pub fn opponent(self) -> Self {
+        match self {
+            Color::Black => Color::White,
+            Color::White => Color::Black,
         }
     }
 
-    #[getter]
-    fn side_to_move(&self) -> u8 {
-        self.inner.side_to_move
+    pub(crate) fn raw(self) -> u8 {
+        self as u8
     }
 
-    #[getter]
-    fn move_number(&self) -> u32 {
+    pub(crate) fn from_raw(v: u8) -> Self {
+        if v == 0 { Color::Black } else { Color::White }
+    }
+}
+
+impl std::fmt::Display for Color {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Color::Black => write!(f, "Black"),
+            Color::White => write!(f, "White"),
+        }
+    }
+}
+
+/// Result of a finished game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameResult {
+    BlackWins,
+    WhiteWins,
+    Draw,
+}
+
+impl std::fmt::Display for GameResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            GameResult::BlackWins => write!(f, "Black wins"),
+            GameResult::WhiteWins => write!(f, "White wins"),
+            GameResult::Draw => write!(f, "Draw"),
+        }
+    }
+}
+
+/// A square on the 36x36 board, represented as `(row, col)`.
+///
+/// - Row 0 = top of the board (White's back rank)
+/// - Row 35 = bottom (Black's back rank)
+/// - Col 0 = left, Col 35 = right
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Square {
+    pub row: usize,
+    pub col: usize,
+}
+
+impl Square {
+    pub fn new(row: usize, col: usize) -> Self {
+        Square { row, col }
+    }
+
+    pub(crate) fn from_index(idx: usize) -> Self {
+        Square { row: idx / BOARD_SIZE, col: idx % BOARD_SIZE }
+    }
+
+    /// Convert to flat index (row * 36 + col).
+    pub fn index(&self) -> usize {
+        self.row * BOARD_SIZE + self.col
+    }
+}
+
+impl std::fmt::Display for Square {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "({},{})", self.row, self.col)
+    }
+}
+
+/// A piece on the board.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Piece {
+    /// Internal piece type ID.
+    pub(crate) type_id: u16,
+    /// Color of this piece.
+    pub color: Color,
+}
+
+impl Piece {
+    /// Abbreviation (e.g., `"K"`, `"CP"`, `"GG"`).
+    pub fn abbrev(&self) -> &'static str {
+        pieces::abbrev(self.type_id)
+    }
+
+    /// Full English name.
+    pub fn name(&self) -> &'static str {
+        pieces::name(self.type_id)
+    }
+
+    /// Material value.
+    pub fn value(&self) -> i32 {
+        pieces::value(self.type_id)
+    }
+
+    /// Whether this is a royal piece (King or Crown Prince).
+    pub fn is_royal(&self) -> bool {
+        pieces::is_royal(self.type_id)
+    }
+
+    /// What this piece promotes to, if anything.
+    pub fn promotes_to(&self) -> Option<&'static str> {
+        pieces::promotes_to(self.type_id).map(|pt| pieces::abbrev(pt))
+    }
+}
+
+impl std::fmt::Display for Piece {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let prefix = if self.color == Color::White { 'v' } else { '^' };
+        write!(f, "{}{}", prefix, self.abbrev())
+    }
+}
+
+/// A move in the game.
+#[derive(Debug, Clone)]
+pub struct Move {
+    inner: types::Move,
+}
+
+impl Move {
+    /// Source square.
+    pub fn from(&self) -> Square {
+        Square::from_index(self.inner.from_sq as usize)
+    }
+
+    /// Destination square.
+    pub fn to(&self) -> Square {
+        Square::from_index(self.inner.to_sq as usize)
+    }
+
+    /// Whether this move promotes the piece.
+    pub fn is_promotion(&self) -> bool {
+        self.inner.promotion
+    }
+
+    /// Whether this is an igui (capture without moving).
+    pub fn is_igui(&self) -> bool {
+        self.inner.is_igui
+    }
+
+    /// The captured piece's abbreviation, if any.
+    pub fn captured(&self) -> Option<&'static str> {
+        if self.inner.captured_piece != 0 {
+            Some(pieces::abbrev(self.inner.captured_piece))
+        } else {
+            None
+        }
+    }
+
+    /// Access the internal move representation.
+    pub fn raw(&self) -> &types::Move {
+        &self.inner
+    }
+}
+
+impl std::fmt::Display for Move {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}->{}", self.from(), self.to())?;
+        if self.is_promotion() { write!(f, "+")?; }
+        Ok(())
+    }
+}
+
+/// Result of a search.
+pub struct SearchResult {
+    /// Best move found, if any.
+    pub best_move: Option<Move>,
+    /// Evaluation score (positive = good for side to move).
+    pub score: i32,
+    /// Number of nodes searched.
+    pub nodes: u64,
+    /// Wall-clock time in milliseconds.
+    pub time_ms: u64,
+}
+
+/// Information about a piece type.
+pub struct PieceInfo {
+    pub abbrev: &'static str,
+    pub name: &'static str,
+    pub value: i32,
+    pub promotes_to: Option<&'static str>,
+    pub slide_directions: usize,
+    pub jump_destinations: usize,
+    pub has_hook: bool,
+    pub area_steps: u8,
+    pub has_range_capture: bool,
+    pub has_igui: bool,
+}
+
+/// Look up information about a piece type by abbreviation.
+///
+/// ```rust
+/// let info = taikyoku_core::piece_info("K").unwrap();
+/// assert_eq!(info.name, "King");
+/// assert!(info.value > 0);
+/// ```
+pub fn piece_info(abbrev: &str) -> Option<PieceInfo> {
+    let pt = pieces::find_by_abbrev(abbrev)?;
+    let mv = pieces::movement(pt);
+    let promo = pieces::promotes_to(pt).map(|p| pieces::abbrev(p));
+    Some(PieceInfo {
+        abbrev: pieces::abbrev(pt),
+        name: pieces::name(pt),
+        value: pieces::value(pt),
+        promotes_to: promo,
+        slide_directions: mv.slides.len(),
+        jump_destinations: mv.jumps.len(),
+        has_hook: mv.hook.is_some(),
+        area_steps: mv.area,
+        has_range_capture: !mv.range_capture.is_empty(),
+        has_igui: mv.igui,
+    })
+}
+
+/// Total number of defined piece types (base + promoted).
+pub fn num_piece_types() -> usize {
+    pieces::num_piece_types()
+}
+
+// ============================================================
+// Board — the main game interface
+// ============================================================
+
+/// The Taikyoku Shogi board.
+///
+/// This is the primary type for interacting with the engine.
+/// Create one with [`Board::initial()`] for the starting position,
+/// or [`Board::empty()`] for an empty board.
+pub struct Board {
+    inner: board::Board,
+}
+
+impl Board {
+    /// Create an empty board.
+    pub fn empty() -> Self {
+        Board { inner: board::Board::new() }
+    }
+
+    /// Create a board with the standard initial position (804 pieces).
+    ///
+    /// ```rust
+    /// let board = taikyoku_core::Board::initial();
+    /// assert_eq!(board.piece_count(taikyoku_core::Color::Black), 402);
+    /// assert_eq!(board.piece_count(taikyoku_core::Color::White), 402);
+    /// ```
+    pub fn initial() -> Self {
+        let mut b = board::Board::new();
+        b.setup_initial();
+        Board { inner: b }
+    }
+
+    /// Whose turn is it?
+    pub fn side_to_move(&self) -> Color {
+        Color::from_raw(self.inner.side_to_move)
+    }
+
+    /// Current full-move number (starts at 1, increments after White moves).
+    pub fn move_number(&self) -> u32 {
         self.inner.move_number
     }
 
-    fn black_piece_count(&self) -> usize {
-        self.inner.piece_count[BLACK as usize]
-    }
-
-    fn white_piece_count(&self) -> usize {
-        self.inner.piece_count[WHITE as usize]
-    }
-
-    fn game_result(&self) -> Option<String> {
-        match self.inner.game_result() {
-            Some(GameResult::BlackWins) => Some("black_wins".into()),
-            Some(GameResult::WhiteWins) => Some("white_wins".into()),
-            Some(GameResult::Draw) => Some("draw".into()),
-            None => None,
+    /// Get the piece at `(row, col)`, or `None` if empty.
+    pub fn get(&self, row: usize, col: usize) -> Option<Piece> {
+        let sq = types::sq_index(row, col);
+        let cell = self.inner.cells[sq];
+        if cell == types::EMPTY_CELL {
+            None
+        } else {
+            Some(Piece {
+                type_id: types::cell_piece(cell),
+                color: Color::from_raw(types::cell_color(cell)),
+            })
         }
     }
 
-    fn piece_positions(&self, py: Python, color: u8) -> PyResult<PyObject> {
-        let dict = PyDict::new(py);
-        let c = color as usize;
-        for i in 0..self.inner.piece_list_len[c] {
-            let sq = self.inner.piece_list[c][i];
-            if sq == INVALID_SQ { continue; }
-            let cell = self.inner.cells[sq as usize];
-            if cell == EMPTY_CELL { continue; }
-            let pt = cell_piece(cell);
-            let r = sq as usize / BOARD_SIZE;
-            let col = sq as usize % BOARD_SIZE;
-            let key = PyTuple::new(py, &[r, col]).expect("failed to create tuple");
-            dict.set_item(key, pieces::abbrev(pt))?;
-        }
-        Ok(dict.into())
+    /// Number of pieces for the given color.
+    pub fn piece_count(&self, color: Color) -> usize {
+        self.inner.piece_count[color.raw() as usize]
     }
 
-    fn royal_positions(&self, py: Python, color: u8) -> PyResult<PyObject> {
-        let list = PyList::empty(py);
-        let c = color as usize;
-        for i in 0..self.inner.royal_count[c] {
-            let sq = self.inner.royal_list[c][i];
-            let r = sq as usize / BOARD_SIZE;
-            let col = sq as usize % BOARD_SIZE;
-            list.append(PyTuple::new(py, &[r, col]).expect("failed"))?;
-        }
-        Ok(list.into())
-    }
-
-    fn score(&self) -> i32 {
+    /// Material score from Black's perspective.
+    /// Positive = Black has more material.
+    pub fn material_score(&self) -> i32 {
         eval::material_score(&self.inner)
     }
 
-    fn apply_move_py(&mut self, from_r: usize, from_c: usize,
-                     to_r: usize, to_c: usize, promotion: bool) -> bool {
-        let from_sq = sq_index(from_r, from_c) as u16;
-        let to_sq = sq_index(to_r, to_c) as u16;
+    /// Evaluate the position from the side to move's perspective.
+    pub fn evaluate(&self) -> i32 {
+        eval::evaluate(&self.inner)
+    }
+
+    /// Check if the game is over.
+    pub fn game_result(&self) -> Option<GameResult> {
+        self.inner.game_result().map(|r| match r {
+            types::GameResult::BlackWins => GameResult::BlackWins,
+            types::GameResult::WhiteWins => GameResult::WhiteWins,
+            types::GameResult::Draw => GameResult::Draw,
+        })
+    }
+
+    /// Generate all legal moves for the side to move.
+    pub fn legal_moves(&self) -> Vec<Move> {
+        movegen::generate_legal_moves(&self.inner)
+            .into_iter()
+            .map(|m| Move { inner: m })
+            .collect()
+    }
+
+    /// Apply a move to the board.
+    pub fn apply(&mut self, mv: &Move) {
+        self.inner.apply_move(&mv.inner);
+    }
+
+    /// Apply a move specified by coordinates. Returns `true` if a matching legal
+    /// move was found and applied, `false` otherwise.
+    ///
+    /// ```rust,no_run
+    /// let mut board = taikyoku_core::Board::initial();
+    /// board.apply_by_coord(25, 0, 24, 0, false); // move pawn forward
+    /// ```
+    pub fn apply_by_coord(&mut self, from_row: usize, from_col: usize,
+                          to_row: usize, to_col: usize, promotion: bool) -> bool {
+        let from_sq = types::sq_index(from_row, from_col) as u16;
+        let to_sq = types::sq_index(to_row, to_col) as u16;
         let moves = movegen::generate_legal_moves(&self.inner);
         for m in &moves {
             if m.from_sq == from_sq && m.to_sq == to_sq && m.promotion == promotion {
@@ -119,156 +406,92 @@ impl PyBoard {
         false
     }
 
-    fn undo(&mut self) -> bool {
+    /// Undo the last move. Returns `false` if there is nothing to undo.
+    pub fn undo(&mut self) -> bool {
         self.inner.undo_move()
     }
 
-    fn legal_moves_py(&self, py: Python) -> PyResult<PyObject> {
-        let moves = movegen::generate_legal_moves(&self.inner);
-        let list = PyList::empty(py);
-        for m in &moves {
-            let d = PyDict::new(py);
-            let fr = m.from_sq as usize / BOARD_SIZE;
-            let fc = m.from_sq as usize % BOARD_SIZE;
-            let tr = m.to_sq as usize / BOARD_SIZE;
-            let tc = m.to_sq as usize % BOARD_SIZE;
-            d.set_item("from", vec![fr, fc])?;
-            d.set_item("to", vec![tr, tc])?;
-            d.set_item("promotion", m.promotion)?;
-            d.set_item("is_igui", m.is_igui)?;
-            if m.captured_piece != 0 {
-                d.set_item("captured", pieces::abbrev(m.captured_piece))?;
-            } else {
-                d.set_item("captured", py.None())?;
-            }
-            list.append(d)?;
-        }
-        Ok(list.into())
-    }
-
-    fn moves_from_py(&self, py: Python, r: usize, c: usize) -> PyResult<PyObject> {
-        let sq = sq_index(r, c) as u16;
-        let moves = movegen::generate_legal_moves(&self.inner);
-        let list = PyList::empty(py);
-        let mut seen = std::collections::HashSet::new();
-        for m in &moves {
-            if m.from_sq == sq {
-                let key = (m.to_sq, m.promotion, m.is_igui);
-                if seen.insert(key) {
-                    let d = PyDict::new(py);
-                    let tr = m.to_sq as usize / BOARD_SIZE;
-                    let tc = m.to_sq as usize % BOARD_SIZE;
-                    d.set_item("to", vec![tr, tc])?;
-                    d.set_item("promotion", m.promotion)?;
-                    d.set_item("is_igui", m.is_igui)?;
-                    if m.captured_piece != 0 {
-                        d.set_item("captured", pieces::name(m.captured_piece))?;
-                    } else {
-                        d.set_item("captured", py.None())?;
-                    }
-                    list.append(d)?;
-                }
-            }
-        }
-        Ok(list.into())
-    }
-
-    fn random_move_py(&self) -> Option<(usize, usize, usize, usize, bool)> {
+    /// Pick a uniformly random legal move, or `None` if no moves exist.
+    pub fn random_move(&self) -> Option<Move> {
         let moves = movegen::generate_legal_moves(&self.inner);
         if moves.is_empty() { return None; }
         use rand::Rng;
         let idx = rand::thread_rng().gen_range(0..moves.len());
-        let m = &moves[idx];
-        let fr = m.from_sq as usize / BOARD_SIZE;
-        let fc = m.from_sq as usize % BOARD_SIZE;
-        let tr = m.to_sq as usize / BOARD_SIZE;
-        let tc = m.to_sq as usize % BOARD_SIZE;
-        Some((fr, fc, tr, tc, m.promotion))
+        Some(Move { inner: moves.into_iter().nth(idx).unwrap() })
     }
 
-    fn search_py(&mut self, depth: u32, time_limit_ms: u64) -> PyResult<(Option<(usize, usize, usize, usize, bool)>, i32, u64, u64)> {
-        let result = search::search(&mut self.inner, depth, time_limit_ms);
-        let mv = result.best_move.map(|m| {
-            let fr = m.from_sq as usize / BOARD_SIZE;
-            let fc = m.from_sq as usize % BOARD_SIZE;
-            let tr = m.to_sq as usize / BOARD_SIZE;
-            let tc = m.to_sq as usize % BOARD_SIZE;
-            (fr, fc, tr, tc, m.promotion)
-        });
-        Ok((mv, result.score, result.nodes, result.time_ms))
+    /// Run an alpha-beta search.
+    ///
+    /// - `depth`: search depth in plies
+    /// - `time_limit_ms`: wall-clock time limit in milliseconds (0 = unlimited)
+    pub fn search(&mut self, depth: u32, time_limit_ms: u64) -> SearchResult {
+        let r = search::search(&mut self.inner, depth, time_limit_ms);
+        SearchResult {
+            best_move: r.best_move.map(|m| Move { inner: m }),
+            score: r.score,
+            nodes: r.nodes,
+            time_ms: r.time_ms,
+        }
     }
 
-    fn display(&self) -> String {
+    /// Render the board as a text string.
+    pub fn display(&self) -> String {
         self.inner.display()
     }
-}
 
-#[pyfunction]
-fn piece_name(abbrev: &str) -> String {
-    if let Some(pt) = pieces::find_by_abbrev(abbrev) {
-        pieces::name(pt).to_string()
-    } else {
-        abbrev.to_string()
+    /// Iterate over all pieces of a given color.
+    pub fn pieces(&self, color: Color) -> Vec<(Square, Piece)> {
+        let c = color.raw() as usize;
+        let mut result = Vec::new();
+        for i in 0..self.inner.piece_list_len[c] {
+            let sq = self.inner.piece_list[c][i];
+            if sq == types::INVALID_SQ { continue; }
+            let cell = self.inner.cells[sq as usize];
+            if cell == types::EMPTY_CELL { continue; }
+            result.push((
+                Square::from_index(sq as usize),
+                Piece {
+                    type_id: types::cell_piece(cell),
+                    color,
+                },
+            ));
+        }
+        result
     }
 }
 
-#[pyfunction]
-fn piece_value(abbrev: &str) -> i32 {
-    if let Some(pt) = pieces::find_by_abbrev(abbrev) {
-        pieces::value(pt)
-    } else {
-        1000
+impl Clone for Board {
+    fn clone(&self) -> Self {
+        Board { inner: self.inner.clone() }
     }
 }
 
-#[pyfunction]
-fn piece_promotes_to(abbrev: &str) -> Option<String> {
-    if let Some(pt) = pieces::find_by_abbrev(abbrev) {
-        pieces::promotes_to(pt).map(|p| pieces::abbrev(p).to_string())
-    } else {
-        None
+impl std::fmt::Display for Board {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.display())
     }
 }
 
-#[pyfunction]
-fn piece_info(py: Python, abbrev: &str) -> PyResult<PyObject> {
-    let d = PyDict::new(py);
-    d.set_item("abbrev", abbrev)?;
-    if let Some(pt) = pieces::find_by_abbrev(abbrev) {
-        d.set_item("name", pieces::name(pt))?;
-        d.set_item("value", pieces::value(pt))?;
-        let promo = pieces::promotes_to(pt).map(|p| pieces::name(p).to_string());
-        d.set_item("promotes_to", promo)?;
-        let mv = pieces::movement(pt);
-        d.set_item("slide_directions", mv.slides.len())?;
-        d.set_item("jump_destinations", mv.jumps.len())?;
-        let mut specials = Vec::new();
-        if mv.hook.is_some() { specials.push("hook"); }
-        if mv.area > 0 { specials.push("area"); }
-        if !mv.range_capture.is_empty() { specials.push("range capture"); }
-        if mv.igui { specials.push("igui"); }
-        d.set_item("specials", specials)?;
-    } else {
-        d.set_item("name", abbrev)?;
-        d.set_item("value", 0)?;
-        d.set_item("promotes_to", py.None())?;
-        d.set_item("slide_directions", 0)?;
-        d.set_item("jump_destinations", 0)?;
-        let empty: Vec<&str> = vec![];
-        d.set_item("specials", empty)?;
+impl std::fmt::Debug for Board {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Board")
+            .field("side_to_move", &self.side_to_move())
+            .field("move_number", &self.move_number())
+            .field("black_pieces", &self.piece_count(Color::Black))
+            .field("white_pieces", &self.piece_count(Color::White))
+            .finish()
     }
-    Ok(d.into())
 }
 
+// ============================================================
+// PyO3 module entry point (only with "python" feature)
+// ============================================================
+
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
+
+#[cfg(feature = "python")]
 #[pymodule]
 fn taikyoku_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyBoard>()?;
-    m.add_function(wrap_pyfunction!(piece_name, m)?)?;
-    m.add_function(wrap_pyfunction!(piece_value, m)?)?;
-    m.add_function(wrap_pyfunction!(piece_promotes_to, m)?)?;
-    m.add_function(wrap_pyfunction!(piece_info, m)?)?;
-    m.add("BOARD_SIZE", BOARD_SIZE)?;
-    m.add("BLACK", BLACK)?;
-    m.add("WHITE", WHITE)?;
-    Ok(())
+    python::register(m)
 }

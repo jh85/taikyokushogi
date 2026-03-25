@@ -647,7 +647,7 @@ fn init_store() -> PieceStore {
         abbrev_to_id.insert(def.abbrev.to_string(), id);
     }
 
-    for (i, def) in PIECE_DEFS.iter().enumerate() {
+    for (_i, def) in PIECE_DEFS.iter().enumerate() {
         // Movement
         let mv = if let Some(manual) = manual_movement(def.abbrev) {
             manual

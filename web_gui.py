@@ -93,7 +93,7 @@ def board_to_json(board):
                 else:
                     piece, color = cell
                     row.append({'piece': piece, 'color': color,
-                                'name': taikyoku_core.piece_name(piece)})
+                                'name': taikyoku_core.piece_name_py(piece)})
             cells.append(row)
         result = board.game_result()
         return {
@@ -219,7 +219,7 @@ class GameHandler(BaseHTTPRequestHandler):
         elif path == '/api/piece-info':
             abbrev = params.get('abbrev', [''])[0]
             if USE_RUST:
-                self._send_json(taikyoku_core.piece_info(abbrev))
+                self._send_json(taikyoku_core.piece_info_py(abbrev))
             else:
                 name = PIECE_NAME.get(abbrev, abbrev)
                 value = PIECE_VALUE.get(abbrev, 0)

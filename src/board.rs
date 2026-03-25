@@ -101,7 +101,9 @@ impl Board {
         }
     }
 
+    /// Get the cell value at a given square index.
     #[inline]
+    #[allow(dead_code)]
     pub fn at(&self, sq: usize) -> Cell {
         self.cells[sq]
     }
@@ -114,7 +116,7 @@ impl Board {
         let pt = cell_piece(from_cell);
         let color = cell_color(from_cell);
         let c = color as usize;
-        let opp = 1 - c;
+        let _opp = 1 - c;
 
         let mut undo = UndoInfo {
             from_sq: m.from_sq, to_sq: m.to_sq,
