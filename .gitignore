@@ -8,3 +8,7 @@ build/
 *.log
 .venv/
 venv/
+target/
+*.so
+*.pyd
+*.dll

@@ -299,7 +299,7 @@ PIECE_DEFS = [
     ('NK', 'Neighboring King', 'fsK', 'SD'),
     ('NT', 'Fierce Wolf', 'FfW', '+BEY'),
     ('O', 'Ox General', 'fFbWfR3', '+FOX'),
-    ('OC', 'Ox Chariot', 'WvR', '+POX'),          # same move as EC but different promotion
+    ('OC', 'Ox Chariot', 'fR', '+POX'),             # forward-only, like Lance
     ('OK', 'Old Kite', 'B2sW', 'LO'),
     ('OM', 'Old Monkey', 'FbW', '+MWI'),
     ('OR', 'Old Rat', 'fWbF', '+MBI'),
@@ -359,7 +359,7 @@ PIECE_DEFS = [
     ('TC', 'Tile Chariot', 'frFblFvR', '+RTI'),    # custom
     ('TD', 'Turtle Dove', 'fB5bsW', 'GR'),
     ('TF', 'Treacherous Fox', None, '+MCR'),       # complex: BAGvRvDvH...
-    ('TG', 'Fierce Tiger', 'bWfR2fB', '+GTI'),     # custom
+    ('TG', 'Fierce Tiger', 'fR', '+GTI'),            # forward-only, like Lance
     ('TS', 'Turtle-snake', 'KfrBblB', '+DTU'),     # custom
     ('TT', 'Right Tiger', 'FlQ', 'WT'),
     ('VB', 'Fierce Bear', 'fB2fsW', '+GBR'),

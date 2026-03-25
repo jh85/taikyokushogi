@@ -292,26 +292,45 @@ def _gen_igui(board, r, c, piece, color, moves):
             moves.append(m)
 
 
+PROMO_ZONE_DEPTH = 11
+FORCED_PROMO_PIECES = {'P', 'SG', 'I', 'D', 'GN', 'L', 'OC', 'TG'}
+
+def _in_promo_zone(r, color):
+    if color == BLACK:
+        return r < PROMO_ZONE_DEPTH
+    return r >= BOARD_SIZE - PROMO_ZONE_DEPTH
+
+def _is_farthest_rank(r, color):
+    return (r == 0 and color == BLACK) or (r == BOARD_SIZE - 1 and color == WHITE)
+
 def _add_move(moves, fr, fc, tr, tc, piece, color, target):
-    """Add a move, including promotion variant if applicable."""
+    """Add a move with zone-based promotion rules."""
     captured = target[0] if target else None
     cap_color = target[1] if target else None
+    is_capture = captured is not None
 
-    # Normal move
-    m = Move(
-        from_sq=(fr, fc), to_sq=(tr, tc),
-        captured=captured, captured_color=cap_color,
-    )
-    moves.append(m)
+    if not _can_promote(piece):
+        moves.append(Move(from_sq=(fr, fc), to_sq=(tr, tc),
+                          captured=captured, captured_color=cap_color))
+        return
 
-    # Promotion variant: only when capturing (promotion by capture rule)
-    if captured is not None and _can_promote(piece):
-        m_promo = Move(
-            from_sq=(fr, fc), to_sq=(tr, tc),
-            promotion=True,
-            captured=captured, captured_color=cap_color,
-        )
-        moves.append(m_promo)
+    from_in = _in_promo_zone(fr, color)
+    to_in = _in_promo_zone(tr, color)
+    may_promote = (not from_in and to_in) or (from_in and to_in and is_capture)
+    must_promote = (to_in and _is_farthest_rank(tr, color)
+                    and piece in FORCED_PROMO_PIECES)
+
+    if must_promote:
+        moves.append(Move(from_sq=(fr, fc), to_sq=(tr, tc), promotion=True,
+                          captured=captured, captured_color=cap_color))
+    elif may_promote:
+        moves.append(Move(from_sq=(fr, fc), to_sq=(tr, tc),
+                          captured=captured, captured_color=cap_color))
+        moves.append(Move(from_sq=(fr, fc), to_sq=(tr, tc), promotion=True,
+                          captured=captured, captured_color=cap_color))
+    else:
+        moves.append(Move(from_sq=(fr, fc), to_sq=(tr, tc),
+                          captured=captured, captured_color=cap_color))
 
 
 def choose_random_move(board: TaikyokuBoard):

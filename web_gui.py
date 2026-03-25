@@ -8,94 +8,133 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-# Add parent dir to path so we can import the engine
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from taikyoku_engine.board import TaikyokuBoard
-from taikyoku_engine.pieces import (
-    BOARD_SIZE, BLACK, WHITE, PIECE_NAME, PIECE_VALUE, PROMOTES_TO, MOVEMENTS,
-)
-from taikyoku_engine.movegen import generate_legal_moves, choose_random_move
-from taikyoku_engine.move import Move
+# Try Rust backend first, fall back to pure Python
+try:
+    import taikyoku_core
+    USE_RUST = True
+    print("Using Rust backend (taikyoku_core)")
+except ImportError:
+    USE_RUST = False
+    print("Rust backend not found, using pure Python")
+
+if not USE_RUST:
+    from taikyoku_engine.board import TaikyokuBoard
+    from taikyoku_engine.pieces import (
+        BOARD_SIZE, BLACK, WHITE, PIECE_NAME, PIECE_VALUE, PROMOTES_TO, MOVEMENTS,
+    )
+    from taikyoku_engine.movegen import generate_legal_moves, choose_random_move
+    from taikyoku_engine.move import Move
+else:
+    BOARD_SIZE = taikyoku_core.BOARD_SIZE
+    BLACK = taikyoku_core.BLACK
+    WHITE = taikyoku_core.WHITE
 
 # ============================================================
 # Game State (global, protected by lock)
 # ============================================================
 game_lock = threading.Lock()
 
+
 class GameState:
     def __init__(self):
-        self.board = TaikyokuBoard()
+        if USE_RUST:
+            self.board = taikyoku_core.PyBoard()
+        else:
+            self.board = TaikyokuBoard()
         self.board.setup_initial()
-        self.mode = 'human_vs_random'  # or 'random_vs_random'
+        self.mode = 'human_vs_random'
         self.human_color = BLACK
-        self.move_log = []        # list of display strings
-        self.score_history = []   # list of int scores (Black's perspective)
-        self.half_move = 0        # half-move counter
-        self.selected = None
-        self.game_over = False
-        self.score_history.append(_compute_score(self.board))
-
-    def reset(self, mode='human_vs_random', human_color=BLACK):
-        self.board = TaikyokuBoard()
-        self.board.setup_initial()
-        self.mode = mode
-        self.human_color = human_color
         self.move_log = []
-        self.score_history = [_compute_score(self.board)]
+        self.score_history = [self._score()]
         self.half_move = 0
         self.selected = None
         self.game_over = False
 
+    def reset(self, mode='human_vs_random', human_color=BLACK):
+        if USE_RUST:
+            self.board = taikyoku_core.PyBoard()
+        else:
+            self.board = TaikyokuBoard()
+        self.board.setup_initial()
+        self.mode = mode
+        self.human_color = human_color
+        self.move_log = []
+        self.score_history = [self._score()]
+        self.half_move = 0
+        self.selected = None
+        self.game_over = False
 
-def _compute_score(board):
-    """Score = sum(Black piece values) - sum(White piece values)."""
-    score = 0
-    for (r, c), piece in board.piece_positions[BLACK].items():
-        score += PIECE_VALUE.get(piece, 1000)
-    for (r, c), piece in board.piece_positions[WHITE].items():
-        score -= PIECE_VALUE.get(piece, 1000)
-    return score
+    def _score(self):
+        if USE_RUST:
+            return self.board.score()
+        score = 0
+        for (r, c), piece in self.board.piece_positions[BLACK].items():
+            score += PIECE_VALUE.get(piece, 1000)
+        for (r, c), piece in self.board.piece_positions[WHITE].items():
+            score -= PIECE_VALUE.get(piece, 1000)
+        return score
+
 
 game = GameState()
 
 
-def board_to_json(board: TaikyokuBoard):
+def board_to_json(board):
     """Serialize board state to JSON-compatible dict."""
-    cells = []
-    for r in range(BOARD_SIZE):
-        row = []
-        for c in range(BOARD_SIZE):
-            cell = board.at(r, c)
-            if cell is None:
-                row.append(None)
-            else:
-                piece, color = cell
-                row.append({'piece': piece, 'color': color,
-                            'name': PIECE_NAME.get(piece, piece)})
-        cells.append(row)
+    if USE_RUST:
+        cells = []
+        for r in range(BOARD_SIZE):
+            row = []
+            for c in range(BOARD_SIZE):
+                cell = board.at(r, c)
+                if cell is None:
+                    row.append(None)
+                else:
+                    piece, color = cell
+                    row.append({'piece': piece, 'color': color,
+                                'name': taikyoku_core.piece_name(piece)})
+            cells.append(row)
+        result = board.game_result()
+        return {
+            'board': cells,
+            'side_to_move': board.side_to_move,
+            'move_number': board.move_number,
+            'game_result': result,
+            'black_pieces': board.black_piece_count(),
+            'white_pieces': board.white_piece_count(),
+        }
+    else:
+        cells = []
+        for r in range(BOARD_SIZE):
+            row = []
+            for c in range(BOARD_SIZE):
+                cell = board.at(r, c)
+                if cell is None:
+                    row.append(None)
+                else:
+                    piece, color = cell
+                    row.append({'piece': piece, 'color': color,
+                                'name': PIECE_NAME.get(piece, piece)})
+            cells.append(row)
+        result = board.get_game_result()
+        return {
+            'board': cells,
+            'side_to_move': board.side_to_move,
+            'move_number': board.move_number,
+            'game_result': result,
+            'black_pieces': len(board.piece_positions[BLACK]),
+            'white_pieces': len(board.piece_positions[WHITE]),
+        }
 
-    result = board.get_game_result()
 
-    return {
-        'board': cells,
-        'side_to_move': board.side_to_move,
-        'move_number': board.move_number,
-        'game_result': result,
-        'black_pieces': len(board.piece_positions[BLACK]),
-        'white_pieces': len(board.piece_positions[WHITE]),
-    }
-
-
-def moves_for_square(board: TaikyokuBoard, r, c):
-    """Get legal moves originating from (r, c)."""
+def moves_for_square(board, r, c):
+    if USE_RUST:
+        return board.moves_from_py(r, c)
     cell = board.at(r, c)
-    if cell is None:
-        return []
+    if cell is None: return []
     piece, color = cell
-    if color != board.side_to_move:
-        return []
-
+    if color != board.side_to_move: return []
     all_moves = generate_legal_moves(board)
     result = []
     seen = set()
@@ -105,17 +144,14 @@ def moves_for_square(board: TaikyokuBoard, r, c):
             if key not in seen:
                 seen.add(key)
                 cap_name = PIECE_NAME.get(m.captured, m.captured) if m.captured else None
-                result.append({
-                    'to': list(m.to_sq),
-                    'promotion': m.promotion,
-                    'is_igui': m.is_igui,
-                    'captured': cap_name,
-                })
+                result.append({'to': list(m.to_sq), 'promotion': m.promotion,
+                               'is_igui': m.is_igui, 'captured': cap_name})
     return result
 
 
 def find_matching_move(board, fr, fc, tr, tc, promotion=False):
-    """Find a legal move matching the given parameters."""
+    if USE_RUST:
+        return board.apply_move_py(fr, fc, tr, tc, promotion)
     all_moves = generate_legal_moves(board)
     for m in all_moves:
         if m.from_sq == (fr, fc) and m.to_sq == (tr, tc) and m.promotion == promotion:
@@ -182,26 +218,28 @@ class GameHandler(BaseHTTPRequestHandler):
 
         elif path == '/api/piece-info':
             abbrev = params.get('abbrev', [''])[0]
-            name = PIECE_NAME.get(abbrev, abbrev)
-            value = PIECE_VALUE.get(abbrev, 0)
-            promo = PROMOTES_TO.get(abbrev)
-            promo_name = PIECE_NAME.get(promo, promo) if promo else None
-            mov = MOVEMENTS.get(abbrev, {})
-            slide_count = len(mov.get('slides', []))
-            jump_count = len(mov.get('jumps', []))
-            specials = []
-            if mov.get('hook'): specials.append(f"hook ({mov['hook']})")
-            if mov.get('area'): specials.append(f"area ({mov['area']})")
-            if mov.get('range_capture'): specials.append("range capture")
-            if mov.get('igui'): specials.append("igui")
-
-            self._send_json({
-                'abbrev': abbrev, 'name': name, 'value': value,
-                'promotes_to': promo_name,
-                'slide_directions': slide_count,
-                'jump_destinations': jump_count,
-                'specials': specials,
-            })
+            if USE_RUST:
+                self._send_json(taikyoku_core.piece_info(abbrev))
+            else:
+                name = PIECE_NAME.get(abbrev, abbrev)
+                value = PIECE_VALUE.get(abbrev, 0)
+                promo = PROMOTES_TO.get(abbrev)
+                promo_name = PIECE_NAME.get(promo, promo) if promo else None
+                mov = MOVEMENTS.get(abbrev, {})
+                slide_count = len(mov.get('slides', []))
+                jump_count = len(mov.get('jumps', []))
+                specials = []
+                if mov.get('hook'): specials.append(f"hook ({mov['hook']})")
+                if mov.get('area'): specials.append(f"area ({mov['area']})")
+                if mov.get('range_capture'): specials.append("range capture")
+                if mov.get('igui'): specials.append("igui")
+                self._send_json({
+                    'abbrev': abbrev, 'name': name, 'value': value,
+                    'promotes_to': promo_name,
+                    'slide_directions': slide_count,
+                    'jump_destinations': jump_count,
+                    'specials': specials,
+                })
 
         else:
             self.send_error(404)
@@ -225,22 +263,29 @@ class GameHandler(BaseHTTPRequestHandler):
                 if game.game_over:
                     self._send_json({'ok': False, 'error': 'Game is over'})
                     return
-                m = find_matching_move(game.board, fr, fc, tr, tc, promotion)
-                if m is None:
-                    self._send_json({'ok': False, 'error': 'Illegal move'})
-                    return
                 game.half_move += 1
                 side = 'Black' if game.board.side_to_move == BLACK else 'White'
-                cap = f" x{m.captured}" if m.captured else ""
-                promo = "+" if m.promotion else ""
                 piece = game.board.at(fr, fc)
                 pname = piece[0] if piece else '?'
-                game.board.apply_move(m)
-                score = _compute_score(game.board)
+                promo_s = "+" if promotion else ""
+                if USE_RUST:
+                    ok = game.board.apply_move_py(fr, fc, tr, tc, promotion)
+                    if not ok:
+                        game.half_move -= 1
+                        self._send_json({'ok': False, 'error': 'Illegal move'})
+                        return
+                else:
+                    m = find_matching_move(game.board, fr, fc, tr, tc, promotion)
+                    if m is None:
+                        game.half_move -= 1
+                        self._send_json({'ok': False, 'error': 'Illegal move'})
+                        return
+                    game.board.apply_move(m)
+                score = game._score()
                 game.score_history.append(score)
-                entry = f"{game.half_move}. {side}: {pname} {_sq(fr,fc)}-{_sq(tr,tc)}{cap}{promo}"
+                entry = f"{game.half_move}. {side}: {pname} {_sq(fr,fc)}-{_sq(tr,tc)}{promo_s}"
                 game.move_log.append(entry)
-                result = game.board.get_game_result()
+                result = board_to_json(game.board)['game_result']
                 if result:
                     game.game_over = True
                     game.move_log.append(f"** Game over: {result} **")
@@ -256,26 +301,40 @@ class GameHandler(BaseHTTPRequestHandler):
                 if game.game_over:
                     self._send_json({'ok': False, 'error': 'Game is over'})
                     return
-                m = choose_random_move(game.board)
-                if m is None:
-                    game.game_over = True
-                    game.move_log.append("No legal moves - stalemate")
-                    self._send_json({'ok': False, 'error': 'No legal moves'})
-                    return
                 game.half_move += 1
                 side = 'Black' if game.board.side_to_move == BLACK else 'White'
-                fr, fc = m.from_sq
-                tr, tc = m.to_sq
-                cap = f" x{m.captured}" if m.captured else ""
-                promo = "+" if m.promotion else ""
-                piece = game.board.at(fr, fc)
-                pname = piece[0] if piece else '?'
-                game.board.apply_move(m)
-                score = _compute_score(game.board)
+                if USE_RUST:
+                    rm = game.board.random_move_py()
+                    if rm is None:
+                        game.half_move -= 1
+                        game.game_over = True
+                        game.move_log.append("No legal moves - stalemate")
+                        self._send_json({'ok': False, 'error': 'No legal moves'})
+                        return
+                    fr, fc, tr, tc, promotion = rm
+                    piece = game.board.at(fr, fc)
+                    pname = piece[0] if piece else '?'
+                    game.board.apply_move_py(fr, fc, tr, tc, promotion)
+                else:
+                    m = choose_random_move(game.board)
+                    if m is None:
+                        game.half_move -= 1
+                        game.game_over = True
+                        game.move_log.append("No legal moves - stalemate")
+                        self._send_json({'ok': False, 'error': 'No legal moves'})
+                        return
+                    fr, fc = m.from_sq
+                    tr, tc = m.to_sq
+                    promotion = m.promotion
+                    piece = game.board.at(fr, fc)
+                    pname = piece[0] if piece else '?'
+                    game.board.apply_move(m)
+                promo_s = "+" if promotion else ""
+                score = game._score()
                 game.score_history.append(score)
-                entry = f"{game.half_move}. {side}: {pname} {_sq(fr,fc)}-{_sq(tr,tc)}{cap}{promo}"
+                entry = f"{game.half_move}. {side}: {pname} {_sq(fr,fc)}-{_sq(tr,tc)}{promo_s}"
                 game.move_log.append(entry)
-                result = game.board.get_game_result()
+                result = board_to_json(game.board)['game_result']
                 if result:
                     game.game_over = True
                     game.move_log.append(f"** Game over: {result} **")
@@ -289,8 +348,13 @@ class GameHandler(BaseHTTPRequestHandler):
 
         elif path == '/api/undo':
             with game_lock:
-                if game.board.move_history:
-                    game.board.undo_move()
+                if USE_RUST:
+                    ok = game.board.undo()
+                else:
+                    ok = bool(game.board.move_history)
+                    if ok:
+                        game.board.undo_move()
+                if ok:
                     if game.move_log:
                         game.move_log.pop()
                     if len(game.score_history) > 1:
