@@ -332,14 +332,23 @@ class GameHandler(BaseHTTPRequestHandler):
             self._send_json({'ok': True, **data})
 
         elif path == '/api/ai-move':
+            depth = body.get('depth', 0)
+            time_limit = body.get('time_limit', 30000)  # ms, default 30s
             with game_lock:
                 if game.game_over:
                     self._send_json({'ok': False, 'error': 'Game is over'})
                     return
                 game.half_move += 1
                 side = 'Black' if game.board.side_to_move == BLACK else 'White'
-                if USE_RUST:
-                    rm = game.board.random_move_py()
+                search_ms = 0
+                search_nodes = 0
+                if depth == 0:
+                    # Random move
+                    if USE_RUST:
+                        rm = game.board.random_move_py()
+                    else:
+                        m = choose_random_move(game.board)
+                        rm = (m.from_sq[0], m.from_sq[1], m.to_sq[0], m.to_sq[1], m.promotion) if m else None
                     if rm is None:
                         game.half_move -= 1
                         game.game_over = True
@@ -347,28 +356,40 @@ class GameHandler(BaseHTTPRequestHandler):
                         self._send_json({'ok': False, 'error': 'No legal moves'})
                         return
                     fr, fc, tr, tc, promotion = rm
-                    piece = game.board.at(fr, fc)
-                    pname = piece[0] if piece else '?'
-                    game.board.apply_move_py(fr, fc, tr, tc, promotion)
                 else:
-                    m = choose_random_move(game.board)
-                    if m is None:
+                    # AI search
+                    if USE_RUST:
+                        result = game.board.search_py(depth, time_limit)
+                        mv, search_score, search_nodes, search_ms = result
+                    else:
+                        from taikyoku_engine.search import search as py_search
+                        result = py_search(game.board, depth=depth, time_limit_ms=time_limit)
+                        mv = (result.best_move.from_sq[0], result.best_move.from_sq[1],
+                              result.best_move.to_sq[0], result.best_move.to_sq[1],
+                              result.best_move.promotion) if result.best_move else None
+                        search_nodes = result.nodes
+                        search_ms = result.time_ms
+                    if mv is None:
                         game.half_move -= 1
                         game.game_over = True
                         game.move_log.append("No legal moves - stalemate")
                         self._send_json({'ok': False, 'error': 'No legal moves'})
                         return
-                    fr, fc = m.from_sq
-                    tr, tc = m.to_sq
-                    promotion = m.promotion
-                    piece = game.board.at(fr, fc)
-                    pname = piece[0] if piece else '?'
-                    game.board.apply_move(m)
+                    fr, fc, tr, tc, promotion = mv
+                piece = game.board.at(fr, fc)
+                pname = piece[0] if piece else '?'
+                if USE_RUST:
+                    game.board.apply_move_py(fr, fc, tr, tc, promotion)
+                else:
+                    mm = find_matching_move(game.board, fr, fc, tr, tc, promotion)
+                    if mm: game.board.apply_move(mm)
                 promo_s = "+" if promotion else ""
                 score = game._score()
                 game.score_history.append(score)
                 game.record_move(side, pname, fr, fc, tr, tc, promotion, score)
-                entry = f"{game.half_move}. {side}: {pname} {_sq(fr,fc)}-{_sq(tr,tc)}{promo_s}"
+                depth_s = f" d{depth}" if depth > 0 else ""
+                time_s = f" {search_ms}ms" if search_ms else ""
+                entry = f"{game.half_move}. {side}: {pname} {_sq(fr,fc)}-{_sq(tr,tc)}{promo_s}{depth_s}{time_s}"
                 game.move_log.append(entry)
                 result = board_to_json(game.board)['game_result']
                 if result:
@@ -696,13 +717,24 @@ body {
     <div class="controls">
         <label>Mode:</label>
         <select id="mode-select">
+            <option value="human_vs_ai">Human vs AI</option>
             <option value="human_vs_random">Human vs Random</option>
             <option value="random_vs_random">Random vs Random</option>
+            <option value="ai_vs_ai">AI vs AI</option>
         </select>
         <label>Play as:</label>
         <select id="color-select">
             <option value="0">Black (first)</option>
             <option value="1">White (second)</option>
+        </select>
+        <label>AI:</label>
+        <select id="ai-depth">
+            <option value="0">Random</option>
+            <option value="1">Depth 1</option>
+            <option value="2" selected>Depth 2</option>
+            <option value="3">Depth 3</option>
+            <option value="4">Depth 4 (slow)</option>
+            <option value="5">Depth 5 (very slow)</option>
         </select>
         <button onclick="newGame()">New Game</button>
         <button onclick="undoMove()">Undo</button>
@@ -977,8 +1009,8 @@ async function onCellClick(r, c) {
     if (!boardState) return;
     if (boardState.game_result) return;
 
-    // In random_vs_random mode, clicks do nothing
-    if (gameMode === 'random_vs_random') return;
+    // In non-human modes, clicks do nothing
+    if (gameMode === 'random_vs_random' || gameMode === 'ai_vs_ai') return;
 
     // Only allow clicks when it's human's turn
     if (boardState.side_to_move !== humanColor) return;
@@ -1051,6 +1083,15 @@ async function doPromo(yes) {
     }
 }
 
+function getAiDepth() {
+    return parseInt(document.getElementById('ai-depth').value);
+}
+
+function isHumanMode() {
+    const mode = document.getElementById('mode-select').value;
+    return mode === 'human_vs_random' || mode === 'human_vs_ai';
+}
+
 async function makeMove(fr, fc, tr, tc, promotion) {
     const res = await fetch('/api/move', {
         method: 'POST',
@@ -1063,16 +1104,30 @@ async function makeMove(fr, fc, tr, tc, promotion) {
         selectedSq = null;
         legalMoves = [];
         renderBoard(data);
-        // Trigger AI response after short delay
-        if (!data.game_result && gameMode === 'human_vs_random') {
-            setTimeout(aiMove, 300);
+        // Trigger AI/random response after short delay
+        if (!data.game_result && isHumanMode()) {
+            document.getElementById('status').textContent = 'Thinking...';
+            setTimeout(aiMove, 100);
         }
     }
 }
 
 async function aiMove() {
     if (boardState && boardState.game_result) return;
-    const res = await fetch('/api/ai-move', {method: 'POST'});
+    const mode = document.getElementById('mode-select').value;
+    let depth = 0;
+    if (mode === 'human_vs_ai' || mode === 'ai_vs_ai') {
+        depth = getAiDepth();
+    }
+    // Time limit: 30s for depth <= 3, 60s for depth 4-5
+    const timeLimit = depth >= 4 ? 60000 : 30000;
+    document.getElementById('status').textContent = depth > 0
+        ? `Searching depth ${depth}...` : 'Thinking...';
+    const res = await fetch('/api/ai-move', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({depth, time_limit: timeLimit})
+    });
     const data = await res.json();
     if (data.ok && data.last_move) {
         lastMove = data.last_move;
@@ -1096,8 +1151,8 @@ async function newGame() {
     });
     await fetchState();
 
-    // If human plays White, trigger AI first move
-    if (mode === 'human_vs_random' && color === 1) {
+    // If human plays White, trigger opponent's first move
+    if (isHumanMode() && color === 1) {
         setTimeout(aiMove, 300);
     }
 }
@@ -1142,9 +1197,9 @@ async function autoTick() {
     if (boardState && boardState.game_result) { stopAuto(); return; }
 
     const mode = document.getElementById('mode-select').value;
-    if (mode === 'random_vs_random') {
+    if (mode === 'random_vs_random' || mode === 'ai_vs_ai') {
         await aiMove();
-    } else if (mode === 'human_vs_random') {
+    } else if (mode === 'human_vs_random' || mode === 'human_vs_ai') {
         // Only auto-move if it's AI's turn
         if (boardState && boardState.side_to_move !== humanColor) {
             await aiMove();
