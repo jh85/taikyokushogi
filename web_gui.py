@@ -579,6 +579,22 @@ body {
     background: #ccccff;
     border-radius: 1px;
 }
+/* Royal pieces (King and Crown Prince) */
+.cell.royal {
+    font-weight: 900;
+    text-shadow: 0 0 3px rgba(255, 215, 0, 0.8);
+}
+.cell.royal.black-piece {
+    background: linear-gradient(135deg, #e8c84a, #c8a030) !important;
+    color: #2a0a0a;
+}
+.cell.royal.white-piece {
+    background: linear-gradient(135deg, #4a6ae8, #3050c8) !important;
+    color: #fff;
+}
+.cell.royal.white-piece::after {
+    background: #aaccff;
+}
 .cell.selected { background: #ffd700 !important; }
 .cell.legal-target { background: #5cb85c !important; cursor: crosshair; }
 .cell.legal-target.has-enemy { background: #d9534f !important; }
@@ -859,6 +875,9 @@ function renderBoard(state) {
                     cell.classList.add('black-piece');
                 } else {
                     cell.classList.add('white-piece');
+                }
+                if (piece.piece === 'K' || piece.piece === 'CP') {
+                    cell.classList.add('royal');
                 }
             }
             // Highlight selected
