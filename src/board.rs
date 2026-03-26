@@ -5,6 +5,8 @@ pub struct Board {
     pub cells: [Cell; NUM_SQUARES],
     pub side_to_move: u8,
     pub move_number: u32,
+    /// Plies since last capture or promotion (for 500-move draw rule).
+    pub no_progress_plies: u32,
     // Piece lists per color
     pub piece_list: [[u16; MAX_PIECES_PER_SIDE]; 2],
     pub piece_list_len: [usize; 2],
@@ -22,6 +24,7 @@ impl Clone for Board {
             cells: self.cells,
             side_to_move: self.side_to_move,
             move_number: self.move_number,
+            no_progress_plies: self.no_progress_plies,
             piece_list: self.piece_list,
             piece_list_len: self.piece_list_len,
             piece_count: self.piece_count,
@@ -38,6 +41,7 @@ impl Board {
             cells: [EMPTY_CELL; NUM_SQUARES],
             side_to_move: BLACK,
             move_number: 1,
+            no_progress_plies: 0,
             piece_list: [[INVALID_SQ; MAX_PIECES_PER_SIDE]; 2],
             piece_list_len: [0; 2],
             piece_count: [0; 2],
@@ -51,6 +55,7 @@ impl Board {
         self.cells = [EMPTY_CELL; NUM_SQUARES];
         self.side_to_move = BLACK;
         self.move_number = 1;
+        self.no_progress_plies = 0;
         self.piece_list = [[INVALID_SQ; MAX_PIECES_PER_SIDE]; 2];
         self.piece_list_len = [0; 2];
         self.piece_count = [0; 2];
@@ -125,7 +130,19 @@ impl Board {
             move_number: self.move_number,
             mid_sq: m.mid_sq, mid_cell: EMPTY_CELL,
             range_caps: None,
+            no_progress_plies: self.no_progress_plies,
         };
+
+        // Update no-progress counter: reset on capture or promotion
+        let is_capture = to_cell != EMPTY_CELL
+            || m.mid_sq != INVALID_SQ
+            || m.range_caps.is_some()
+            || m.is_igui;
+        if is_capture || m.promotion {
+            self.no_progress_plies = 0;
+        } else {
+            self.no_progress_plies += 1;
+        }
 
         // Handle range captures
         if let Some(ref caps) = m.range_caps {
@@ -207,6 +224,7 @@ impl Board {
 
         self.side_to_move = undo.side;
         self.move_number = undo.move_number;
+        self.no_progress_plies = undo.no_progress_plies;
 
         let from = undo.from_sq as usize;
         let to = undo.to_sq as usize;
@@ -355,7 +373,14 @@ impl Board {
         let b = self.royal_count[BLACK as usize] > 0;
         let w = self.royal_count[WHITE as usize] > 0;
         match (b, w) {
-            (true, true) => None,
+            (true, true) => {
+                // 500-move draw rule: 1000 plies without capture or promotion
+                if self.no_progress_plies >= DRAW_PLIES {
+                    Some(GameResult::Draw)
+                } else {
+                    None
+                }
+            }
             (true, false) => Some(GameResult::BlackWins),
             (false, true) => Some(GameResult::WhiteWins),
             (false, false) => Some(GameResult::Draw),

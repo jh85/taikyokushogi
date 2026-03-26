@@ -51,6 +51,10 @@ Range-capturing pieces (Great General, Vice General, etc.) can fly over and capt
 3. Vice General
 4. Flying General, Angle General, Fierce Dragon, Flying Crocodile
 
+### Draw by No Progress (500-Move Rule)
+
+The game is automatically drawn if **500 consecutive full moves** (1,000 plies) pass with neither player making a capture nor a promotion. This prevents games from continuing indefinitely when neither side can make progress. The counter resets whenever a piece is captured or a promotion occurs.
+
 ### Initial Setup
 
 Each side's 402 pieces occupy 12 ranks. Black occupies the bottom of the board (rows 25-36); White mirrors from the top (rows 1-12). The King sits at the center of the back rank, flanked by the Crown Prince.

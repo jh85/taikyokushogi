@@ -173,6 +173,10 @@ pub const RANK_VICE: u8 = 2;
 pub const RANK_RANGE_CAP: u8 = 3;
 pub const RANK_NORMAL: u8 = 4;
 
+/// No-progress draw threshold (in plies). If 1000 consecutive plies pass
+/// with no capture and no promotion, the game is automatically drawn.
+pub const DRAW_PLIES: u32 = 1000;
+
 /// Undo information saved per move.
 #[derive(Clone)]
 pub struct UndoInfo {
@@ -185,6 +189,7 @@ pub struct UndoInfo {
     pub mid_sq: u16,
     pub mid_cell: Cell,
     pub range_caps: Option<Vec<(u16, Cell)>>,
+    pub no_progress_plies: u32,
 }
 
 // ============================================================

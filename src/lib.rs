@@ -334,6 +334,13 @@ impl Board {
         self.inner.move_number
     }
 
+    /// Number of consecutive plies without a capture or promotion.
+    /// The game is automatically drawn when this reaches 1,000
+    /// (500 full moves without progress).
+    pub fn no_progress_plies(&self) -> u32 {
+        self.inner.no_progress_plies
+    }
+
     /// Get the piece at `(row, col)`, or `None` if empty.
     pub fn get(&self, row: usize, col: usize) -> Option<Piece> {
         let sq = types::sq_index(row, col);
