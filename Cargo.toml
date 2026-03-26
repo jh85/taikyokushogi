@@ -8,6 +8,14 @@ repository = "https://github.com/jh85/taikyokushogi"
 readme = "README.md"
 keywords = ["shogi", "taikyoku", "board-game", "chess-variant", "game-engine"]
 categories = ["games", "game-engines"]
+exclude = [
+    "taikyoku_engine/",
+    "web_gui.py",
+    "pyproject.toml",
+    "PIECES.md",
+    ".venv/",
+    "en.wikipedia.org/",
+]
 
 [lib]
 name = "taikyokushogi"

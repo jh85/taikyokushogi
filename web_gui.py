@@ -5,6 +5,7 @@ import json
 import sys
 import os
 import threading
+import time as _time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -51,6 +52,10 @@ class GameState:
         self.half_move = 0
         self.selected = None
         self.game_over = False
+        # Game record
+        self.record = []          # list of {move_num, side, piece, from, to, promo, time_s, score}
+        self.last_move_time = _time.monotonic()
+        self.game_start_time = _time.strftime('%Y-%m-%d %H:%M:%S')
 
     def reset(self, mode='human_vs_random', human_color=BLACK):
         if USE_RUST:
@@ -65,6 +70,24 @@ class GameState:
         self.half_move = 0
         self.selected = None
         self.game_over = False
+        self.record = []
+        self.last_move_time = _time.monotonic()
+        self.game_start_time = _time.strftime('%Y-%m-%d %H:%M:%S')
+
+    def record_move(self, side, piece_abbrev, fr, fc, tr, tc, promotion, score):
+        now = _time.monotonic()
+        elapsed = round(now - self.last_move_time, 2)
+        self.last_move_time = now
+        self.record.append({
+            'n': self.half_move,
+            'side': side,
+            'piece': piece_abbrev,
+            'from': (fr, fc),
+            'to': (tr, tc),
+            'promo': promotion,
+            'time': elapsed,
+            'score': score,
+        })
 
     def _score(self):
         if USE_RUST:
@@ -241,6 +264,17 @@ class GameHandler(BaseHTTPRequestHandler):
                     'specials': specials,
                 })
 
+        elif path == '/api/record':
+            with game_lock:
+                text = _build_game_record()
+            body = text.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Disposition', 'attachment; filename="taikyoku_game.tsv"')
+            self.send_header('Content-Length', len(body))
+            self.end_headers()
+            self.wfile.write(body)
+
         else:
             self.send_error(404)
 
@@ -283,6 +317,7 @@ class GameHandler(BaseHTTPRequestHandler):
                     game.board.apply_move(m)
                 score = game._score()
                 game.score_history.append(score)
+                game.record_move(side, pname, fr, fc, tr, tc, promotion, score)
                 entry = f"{game.half_move}. {side}: {pname} {_sq(fr,fc)}-{_sq(tr,tc)}{promo_s}"
                 game.move_log.append(entry)
                 result = board_to_json(game.board)['game_result']
@@ -332,6 +367,7 @@ class GameHandler(BaseHTTPRequestHandler):
                 promo_s = "+" if promotion else ""
                 score = game._score()
                 game.score_history.append(score)
+                game.record_move(side, pname, fr, fc, tr, tc, promotion, score)
                 entry = f"{game.half_move}. {side}: {pname} {_sq(fr,fc)}-{_sq(tr,tc)}{promo_s}"
                 game.move_log.append(entry)
                 result = board_to_json(game.board)['game_result']
@@ -380,6 +416,29 @@ class GameHandler(BaseHTTPRequestHandler):
 def _sq(r, c):
     """Format square coordinate."""
     return f"({r},{c})"
+
+
+def _build_game_record():
+    """Build a game record as a tab-separated text file."""
+    lines = []
+    lines.append(f"# Taikyoku Shogi Game Record")
+    lines.append(f"# Date: {game.game_start_time}")
+    lines.append(f"# Mode: {game.mode}")
+    result = board_to_json(game.board).get('game_result')
+    lines.append(f"# Result: {result or 'in progress'}")
+    lines.append(f"# Moves: {game.half_move}")
+    lines.append(f"# Final score (Black perspective): {game._score()}")
+    lines.append(f"#")
+    lines.append(f"# move\tside\tpiece\tfrom_r\tfrom_c\tto_r\tto_c\tpromo\ttime_s\tscore")
+
+    for rec in game.record:
+        fr, fc = rec['from']
+        tr, tc = rec['to']
+        promo = '+' if rec['promo'] else ''
+        lines.append(f"{rec['n']}\t{rec['side']}\t{rec['piece']}\t{fr}\t{fc}\t{tr}\t{tc}\t{promo}\t{rec['time']}\t{rec['score']}")
+
+    lines.append('')
+    return '\n'.join(lines)
 
 
 # ============================================================
@@ -648,6 +707,7 @@ body {
         <button onclick="newGame()">New Game</button>
         <button onclick="undoMove()">Undo</button>
         <button id="auto-btn" onclick="toggleAuto()">Auto Play</button>
+        <button onclick="downloadRecord()">Save Record</button>
         <div class="speed-control">
             <label>Speed:</label>
             <input type="range" id="speed" min="100" max="3000" value="800" step="100">
@@ -1048,6 +1108,10 @@ async function undoMove() {
     selectedSq = null;
     legalMoves = [];
     await fetchState();
+}
+
+function downloadRecord() {
+    window.location.href = '/api/record';
 }
 
 function toggleAuto() {
