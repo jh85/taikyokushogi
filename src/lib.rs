@@ -44,6 +44,7 @@ mod board;
 mod movegen;
 mod eval;
 mod search;
+mod tsfen;
 
 #[cfg(feature = "python")]
 mod python;
@@ -437,6 +438,37 @@ impl Board {
     /// Render the board as a text string.
     pub fn display(&self) -> String {
         self.inner.display()
+    }
+
+    /// Encode the board position as a TSFEN string.
+    ///
+    /// Format: `rank/rank/.../rank side move_number`
+    ///
+    /// ```rust
+    /// let board = taikyokushogi::Board::initial();
+    /// let tsfen = board.to_tsfen();
+    /// assert!(tsfen.ends_with(" b 1"));
+    ///
+    /// // Round-trip
+    /// let board2 = taikyokushogi::Board::from_tsfen(&tsfen).unwrap();
+    /// assert_eq!(board2.to_tsfen(), tsfen);
+    /// ```
+    pub fn to_tsfen(&self) -> String {
+        tsfen::to_tsfen(&self.inner)
+    }
+
+    /// Parse a TSFEN string into a board position.
+    ///
+    /// Returns `Err` with a description if the TSFEN is malformed.
+    ///
+    /// ```rust
+    /// let board = taikyokushogi::Board::initial();
+    /// let tsfen = board.to_tsfen();
+    /// let board2 = taikyokushogi::Board::from_tsfen(&tsfen).unwrap();
+    /// assert_eq!(board2.piece_count(taikyokushogi::Color::Black), 402);
+    /// ```
+    pub fn from_tsfen(tsfen: &str) -> Result<Self, String> {
+        tsfen::from_tsfen(tsfen).map(|inner| Board { inner })
     }
 
     /// Iterate over all pieces of a given color.

@@ -265,6 +265,11 @@ impl Board {
         true
     }
 
+    /// Rebuild piece position indices from the cells array.
+    pub fn rebuild_lists_pub(&mut self) {
+        self.rebuild_lists();
+    }
+
     fn rebuild_lists(&mut self) {
         self.piece_list_len = [0; 2];
         self.piece_count = [0; 2];

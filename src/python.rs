@@ -78,6 +78,17 @@ impl PyBoard {
 
     fn score(&self) -> i32 { eval::material_score(&self.inner) }
 
+    fn to_tsfen(&self) -> String {
+        crate::tsfen::to_tsfen(&self.inner)
+    }
+
+    #[staticmethod]
+    fn from_tsfen(tsfen: &str) -> PyResult<Self> {
+        crate::tsfen::from_tsfen(tsfen)
+            .map(|inner| PyBoard { inner })
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+    }
+
     fn apply_move_py(&mut self, from_r: usize, from_c: usize,
                      to_r: usize, to_c: usize, promotion: bool) -> bool {
         let from_sq = sq_index(from_r, from_c) as u16;
