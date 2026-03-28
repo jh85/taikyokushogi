@@ -30,13 +30,13 @@ Diagrams show movement from **Black's perspective** (forward = up).
 
 ## Base Pieces (209)
 
-### Angry Boar (AB)
+### Angry Boar (AB) 嗔猪
 
 ```
 . . . . .
-. . . . .
+. o . o .
 . o # o .
-. . . . .
+. o . o .
 . . . . .
 ```
 
@@ -3162,14 +3162,14 @@ Diagrams show movement from **Black's perspective** (forward = up).
 
 ---
 
-### Free Boar (+FBI)
+### Free Boar (+FB) 奔猪
 
 ```
-. . | . .
-. . | . .
+\ . | . /
+. \ | / .
 - - # - -
-. 1 | 1 .
-2 . | . 2
+. . o . .
+. . . . .
 ```
 
 ---
